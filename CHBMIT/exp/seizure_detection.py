@@ -1,3 +1,4 @@
+import os
 import argparse
 import json
 import torch
@@ -125,7 +126,10 @@ def train_teacher_model(target, epochs, optimizer_type, patience):
     print(f"Patient {target} - Test AUC: {auc_test:.4f}")
 
     # Save the trained teacher model
-    model_path = f"pytorch_models/Patient_{target}_detection"
+    if not os.path.exists(teacher_settings["checkptdir"]):
+        os.makedirs(teacher_settings["checkptdir"])
+        print(f"Checkpoints Directory created.")
+    model_path = f"{teacher_settings['checkptdir']}/Patient_{target}_detection"
     torch.save(teacher, model_path)
 
     # Plot training loss

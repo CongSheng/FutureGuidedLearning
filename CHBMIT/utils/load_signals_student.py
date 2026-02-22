@@ -458,6 +458,9 @@ class PrepDataStudent:
         return data
 
     def apply(self):
+        if not os.path.exists(self.settings["cachedir"]):
+            os.makedirs(self.settings["cachedir"])
+            print(f"Cache Directory created.")
         filename = "%s_%s" % (self.type, self.target)
         cache = load_hickle_file(os.path.join(self.settings["cachedir"], filename))
         if cache is not None:
