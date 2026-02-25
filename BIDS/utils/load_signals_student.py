@@ -1,19 +1,89 @@
 import os
-from os import path
 import numpy as np
 import pandas as pd
-from scipy.io import loadmat
+import scipy.io
 from scipy.signal import resample
 import stft
-import json
-from utils.log import log
+import matplotlib.pyplot as plt
+from mne.io import read_raw_edf
 from utils.save_load import (
     save_pickle_file,
     load_pickle_file,
     save_hickle_file,
     load_hickle_file,
 )
-from mne.io import read_raw_edf
+
+
+def calculate_interictal_hours():
+    hours = dict()
+    targets = [i for i in range(1, 24)]
+    for target in targets:
+        if target < 10:
+            thingy = "0" + str(target)
+        elif target < 100:
+            thingy = str(target)
+        data_dir = f"Dataset/chb{thingy}"
+        print("Calculating interictal hours for patient", target)
+        onset = pd.read_csv(f"Dataset/seizure_summary.csv", header=0)
+        # print (onset)
+        osfilenames, szstart, szstop = (
+            onset["File_name"],
+            onset["Seizure_start"],
+            onset["Seizure_stop"],
+        )
+        osfilenames = list(osfilenames)
+        # print ('Seizure files:', osfilenames)
+
+        segment = pd.read_csv("Dataset/segmentation.csv", header=None)
+        nsfilenames = list(segment[segment[1] == 0][0])
+
+        nsdict = {"0": []}
+        targets = [str(i) for i in range(1, 24)]
+        for t in targets:
+            nslist = [
+                elem
+                for elem in nsfilenames
+                if elem.find("chb%s_" % t) != -1
+                or elem.find("chb0%s_" % t) != -1
+                or elem.find("chb%sa_" % t) != -1
+                or elem.find("chb%sb_" % t) != -1
+                or elem.find("chb%sc_" % t) != -1
+            ]
+            nsdict[t] = nslist
+
+        special_interictal = pd.read_csv("Dataset/special_interictal.csv", header=None)
+        sifilenames, sistart, sistop = (
+            special_interictal[0],
+            special_interictal[1],
+            special_interictal[2],
+        )
+        sifilenames = list(sifilenames)
+
+        def strcv(i):
+            if i < 10:
+                return "0" + str(i)
+            elif i < 100:
+                return str(i)
+
+        strtrg = "chb" + strcv(int(target))
+        dir = data_dir
+        text_files = [f for f in os.listdir(dir) if f.endswith(".edf")]
+
+        edf_files = [
+            filename for filename in text_files if filename in nsdict[str(target)]
+        ]
+        sampling_rate = 256  # Hz
+        total_duration = 0.0
+
+        for file in edf_files:
+            file = f"Dataset/chb{thingy}/{file}"
+            raw = read_raw_edf(file, preload=True)
+            total_samples = raw.n_times
+            duration = total_samples / sampling_rate
+            total_duration += duration
+        print("total duration in hours: ", total_duration / 60 / 60)
+        hours[target] = total_duration / 60 / 60
+    print(hours)
 
 
 def load_signals_CHBMIT(data_dir, target, data_type):
@@ -21,7 +91,7 @@ def load_signals_CHBMIT(data_dir, target, data_type):
 
     onset = pd.read_csv(os.path.join(data_dir, "seizure_summary.csv"), header=0)
     # print (onset)
-    osfilenames, sstart, sstop = (
+    osfilenames, szstart, szstop = (
         onset["File_name"],
         onset["Seizure_start"],
         onset["Seizure_stop"],
@@ -67,7 +137,7 @@ def load_signals_CHBMIT(data_dir, target, data_type):
             or elem.find("chb%sa_" % t) != -1
             or elem.find("chb%sb_" % t) != -1
             or elem.find("chb%sc_" % t) != -1
-        ]  # could be done much better, I am so lazy
+        ]
         nsdict[t] = nslist
 
     special_interictal = pd.read_csv(
@@ -89,6 +159,7 @@ def load_signals_CHBMIT(data_dir, target, data_type):
     strtrg = "chb" + strcv(int(target))
     dir = os.path.join(data_dir, strtrg)
     text_files = [f for f in os.listdir(dir) if f.endswith(".edf")]
+    # print (text_files)
 
     if data_type == "ictal":
         filenames = [filename for filename in text_files if filename in osfilenames]
@@ -96,8 +167,9 @@ def load_signals_CHBMIT(data_dir, target, data_type):
         filenames = [filename for filename in text_files if filename in nsdict[target]]
 
     totalfiles = len(filenames)
-    # print ('Total %s files %d' % (data_type,totalfiles))
+    print("Total %s files %d" % (data_type, totalfiles))
     for filename in filenames:
+
         if target in ["13", "16"]:
             chs = [
                 "FP1-F7",
@@ -169,7 +241,6 @@ def load_signals_CHBMIT(data_dir, target, data_type):
 
         rawEEG = read_raw_edf("%s/%s" % (dir, filename), verbose=0, preload=True)
         rawEEG.pick_channels(chs, ordered=False)
-
         if target == "13" and "T8-P8" in rawEEG.ch_names:
             rawEEG.drop_channels("T8-P8")
 
@@ -177,67 +248,121 @@ def load_signals_CHBMIT(data_dir, target, data_type):
         tmp = tmp.values
 
         if data_type == "ictal":
-            # get onset information
+            SOP = 30 * 60 * 256
+            # get seizure onset information
             indices = [ind for ind, x in enumerate(osfilenames) if x == filename]
-            if len(indices) > 0:  # multiple seizures in one file
+            if len(indices) > 0:
                 print("%d seizures in the file %s" % (len(indices), filename))
+                prev_sp = -1e6
                 for i in range(len(indices)):
-                    st = sstart[indices[i]] * 256
-                    sp = sstop[indices[i]] * 256
-                    print(
-                        "%s: Seizure %d starts at %d stops at %d"
-                        % (filename, i, st, sp)
-                    )
-                    data = tmp[st:sp]
+                    st = szstart[indices[i]] * 256 - 5 * 60 * 256  # SPH=5min
+                    sp = szstop[indices[i]] * 256
+                    # print ('Seizure %s %d starts at %d stops at %d last sz stop is %d' % (filename, i, (st+5*60*256),sp,prev_sp))
+
+                    # take care of some special filenames
+                    if filename[6] == "_":
+                        seq = int(filename[7:9])
+                    else:
+                        seq = int(filename[6:8])
+                    if filename == "chb02_16+.edf":
+                        prevfile = "chb02_16.edf"
+                    else:
+                        if filename[6] == "_":
+                            prevfile = "%s_%s.edf" % (filename[:6], strcv(seq - 1))
+                        else:
+                            prevfile = "%s_%s.edf" % (filename[:5], strcv(seq - 1))
+
+                    if st - SOP > prev_sp:
+                        prev_sp = sp
+                        if st - SOP >= 0:
+                            data = tmp[st - SOP : st]
+                        else:
+                            if os.path.exists("%s/%s" % (dir, prevfile)):
+                                rawEEG = read_raw_edf(
+                                    "%s/%s" % (dir, prevfile), preload=True, verbose=0
+                                )
+                                rawEEG.pick_channels(chs)
+                                if target == "13" and "T8-P8" in rawEEG.ch_names:
+                                    rawEEG.drop_channels("T8-P8")
+                                prevtmp = rawEEG.to_data_frame()
+                                prevtmp = prevtmp.values
+                                if st > 0:
+                                    data = np.concatenate(
+                                        (prevtmp[st - SOP :], tmp[:st])
+                                    )
+                                else:
+                                    data = prevtmp[st - SOP : st]
+
+                            else:
+                                if st > 0:
+                                    data = tmp[:st]
+                                else:
+                                    # raise Exception("file %s does not contain useful info" % filename)
+                                    print(
+                                        "WARNING: file %s does not contain useful info"
+                                        % filename
+                                    )
+                                    continue
+                    else:
+                        prev_sp = sp
+                        continue
+
                     print("data shape", data.shape)
-                    yield (data)
+                    if data.shape[0] == SOP:
+                        yield (data)
+                    else:
+                        continue
 
         elif data_type == "interictal":
             if filename in sifilenames:
-                print("Special interictal %s" % filename)
-                st = sistart[sifilenames.index(filename)] * 256
-                sp = sistop[sifilenames.index(filename)] * 256
+                st = sistart[sifilenames.index(filename)]
+                sp = sistop[sifilenames.index(filename)]
                 if sp < 0:
-                    data = tmp[st:]
+                    data = tmp[st * 256 :]
                 else:
-                    data = tmp[st:sp]
+                    data = tmp[st * 256 : sp * 256]
             else:
                 data = tmp
             print("data shape", data.shape)
             yield (data)
 
 
-class PrepDataTeacher:
+class PrepDataStudent:
     def __init__(self, target, type, settings):
         self.target = target
         self.settings = settings
         self.type = type
 
     def read_raw_signal(self):
+        self.samp_freq = 256
         self.freq = 256
-        self.global_proj = np.array([0.0] * 114)
         return load_signals_CHBMIT(self.settings["datadir"], self.target, self.type)
 
     def preprocess(self, data_):
         ictal = self.type == "ictal"
         interictal = self.type == "interictal"
-        targetFrequency = self.freq
+        targetFrequency = self.freq  # re-sample to target frequency
         numts = 30
 
-        df_sampling = pd.read_csv("Dataset/sampling_CHBMIT.csv")
+        df_sampling = pd.read_csv(
+            "Dataset/sampling_%s.csv" % self.settings["dataset"],
+            header=0,
+            index_col=None,
+        )
         trg = int(self.target)
         # print (df_sampling)
         # print (df_sampling[df_sampling.Subject==trg].ictal_ovl.values)
         ictal_ovl_pt = df_sampling[df_sampling.Subject == trg].ictal_ovl.values[0]
-        ictal_ovl_len = int(targetFrequency * ictal_ovl_pt)
+        ictal_ovl_len = int(targetFrequency * ictal_ovl_pt * numts)
 
         def process_raw_data(mat_data):
             print("Loading data")
-
             X = []
             y = []
-
+            # scale_ = scale_coef[target]
             for data in mat_data:
+                if self.settings["dataset"] == "FB":
+                    data = data.transpose()
                 if ictal:
                     y_value = 1
                 else:
@@ -281,10 +406,10 @@ class PrepDataTeacher:
                         X_temp.append(stft_data)
                         y_temp.append(y_value)
 
-                # overlapped window
+                # overdsampling
                 if ictal:
                     i = 1
-                    print("ictal oversampling ratio =", ictal_ovl_len)
+                    print("ictal_ovl_len =", ictal_ovl_len)
                     while window_len + (i + 1) * ictal_ovl_len <= data.shape[0]:
                         s = data[i * ictal_ovl_len : i * ictal_ovl_len + window_len, :]
 
@@ -315,18 +440,15 @@ class PrepDataTeacher:
                         )
 
                         X_temp.append(stft_data)
-                        # to differentiate between non overlapped and overlapped
-                        # samples. Testing only uses non overlapped ones.
+                        # differentiate between non-overlapped and overlapped
+                        # samples. Testing only uses non-overlapped ones.
                         y_temp.append(2)
                         i += 1
 
-                try:
-                    X_temp = np.concatenate(X_temp, axis=0)
-                    y_temp = np.array(y_temp)
-                    X.append(X_temp)
-                    y.append(y_temp)
-                except:
-                    print("seizure too short")
+                X_temp = np.concatenate(X_temp, axis=0)
+                y_temp = np.array(y_temp)
+                X.append(X_temp)
+                y.append(y_temp)
 
             # y = np.array(y)
             print("X", len(X), X[0].shape, "y", len(y), y[0].shape)
@@ -346,114 +468,6 @@ class PrepDataTeacher:
 
         data = self.read_raw_signal()
         X, y = self.preprocess(data)
+
         save_hickle_file(os.path.join(self.settings["cachedir"], filename), [X, y])
         return X, y
-
-
-# class PrepDataTeacher:
-#     def __init__(self, target, type, settings, verbose=False):
-#         self.target = target
-#         self.settings = settings
-#         self.type = type
-#         self.freq = 256  # sampling frequency
-#         self.verbose = verbose
-
-#     def read_raw_signal(self):
-#         # Only reads the necessary data once
-#         return load_signals_CHBMIT(self.settings["datadir"], self.target, self.type)
-
-#     def preprocess(self, data_):
-#         ictal = self.type == "ictal"
-#         interictal = self.type == "interictal"
-#         target_freq = self.freq
-#         window_sec = 30
-#         window_len = target_freq * window_sec
-
-#         # Load patient-specific overlap parameter just once
-#         df_sampling = pd.read_csv("Dataset/sampling_CHBMIT.csv")
-#         trg = int(self.target)
-#         ictal_ovl_pt = df_sampling[df_sampling.Subject == trg].ictal_ovl.values[0]
-#         ictal_ovl_len = int(target_freq * ictal_ovl_pt)  # Step size for overlaps
-
-#         X, y = [], []
-
-#         for data in data_:
-#             # -------- Window extraction (vectorized) --------
-#             num_windows = (data.shape[0] - window_len) // window_len + 1
-#             indices = np.arange(num_windows) * window_len
-#             # Non-overlapping windows
-#             for idx in indices:
-#                 s = data[idx : idx + window_len, :]
-#                 stft_data = self._process_window(s, target_freq)
-#                 X.append(stft_data)
-#                 y.append(1 if ictal else 0)
-
-#             # -------- Ictal overlapping windows (efficient) --------
-#             if ictal:
-#                 overlapped_indices = np.arange(
-#                     1, (data.shape[0] - window_len) // ictal_ovl_len
-#                 )
-#                 for i in overlapped_indices:
-#                     idx = i * ictal_ovl_len
-#                     if idx + window_len <= data.shape[0]:
-#                         s = data[idx : idx + window_len, :]
-#                         stft_data = self._process_window(s, target_freq)
-#                         X.append(stft_data)
-#                         y.append(2)  # label for overlapped window (for training only)
-
-#         # -------- Efficient concatenation --------
-#         X = np.stack(X, axis=0)  # 1st axis: windows
-#         y = np.array(y)
-
-#         if self.verbose:
-#             print(
-#                 f"Total windows: {X.shape[0]}, X shape: {X.shape}, y shape: {y.shape}"
-#             )
-
-#         return X, y
-
-#     def _process_window(self, s, target_freq):
-#         """Process a single window, vectorized for speed."""
-#         stft_data = stft.spectrogram(s, framelength=target_freq, centered=False)
-#         stft_data = np.abs(stft_data) + 1e-6
-#         stft_data = np.log10(stft_data)
-#         stft_data[stft_data <= 0] = 0
-#         stft_data = np.transpose(stft_data, (2, 1, 0))
-#         stft_data = np.concatenate(
-#             (stft_data[:, :, 1:57], stft_data[:, :, 64:117], stft_data[:, :, 124:]),
-#             axis=-1,
-#         )
-#         stft_data = stft_data.reshape(
-#             -1,
-#             1,
-#             stft_data.shape[0],
-#             stft_data.shape[1],
-#             stft_data.shape[2],
-#         )
-#         return stft_data
-
-#     def apply(self):
-#         # Cache check
-#         cachedir = self.settings["cachedir"]
-#         filename = f"{self.type}_{self.target}"
-#         cache_path = os.path.join(cachedir, filename)
-#         cache = load_hickle_file(cache_path)
-
-#         if cache is not None:
-#             if self.verbose:
-#                 print("Loaded from cache")
-#             return cache
-
-#         data = self.read_raw_signal()
-#         X, y = self.preprocess(data)
-#         save_hickle_file(cache_path, [X, y])
-#         if self.verbose:
-#             print(f"Saved to cache: {cache_path}")
-#         return X, y
-
-
-def makedirs(dir):
-    try:
-        os.makedirs(dir)
-    except:
-        pass

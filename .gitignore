@@ -1,6 +1,7 @@
 # User-defined
 cache*/
 Dataset/
+BIDS_*/
 pytorch_models/
 *_results.txt
 __init__.py
