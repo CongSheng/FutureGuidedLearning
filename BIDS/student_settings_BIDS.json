@@ -1,10 +1,10 @@
-{
-    "sampfreq":256,
+{   "sampfreq":256,
     "windowsec":30,
+    "SOPsec":1800,
     "dataset": "CHBMIT",
     "datadir": "BIDS_CHB-MIT",
-    "cachedir": "cachedir-teacher_CHB",
-    "resultdir": "teacher-CHBMIT",
+    "cachedir": "cachedir-student_CHB",
+    "resultdir": "student-CHBMIT",
     "checkptdir":"pytorch_models",
     "combined_csv":"BIDS_CHB-MIT/tsv_combined.csv",
     "sampling_csv":"BIDS_CHB-MIT/sampling_CHBMIT.csv"

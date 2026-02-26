@@ -6,23 +6,15 @@ from scipy.io import loadmat
 from scipy.signal import resample
 import stft
 import json
-from utils.log import log
+from mne.io import read_raw_edf
 from utils.save_load import (
-    save_pickle_file,
-    load_pickle_file,
     save_hickle_file,
     load_hickle_file,
 )
-from mne.io import read_raw_edf
+
 
 SZ_KEY = "(?i)sz"
 NSZ_KEY = "(?i)bckg"
-
-
-def tsv_to_edf(tsv_path):
-    file_name = os.path.basename(tsv_path).replace("events.tsv", "eeg.edf")
-    edf_path = os.path.join(os.path.dirname(tsv_path), file_name)
-    return edf_path
 
 
 def load_signals_CHBMIT(data_dir, patient, data_type, settings, verbose=False):
@@ -32,7 +24,7 @@ def load_signals_CHBMIT(data_dir, patient, data_type, settings, verbose=False):
         dataset = "CHB-Siena"
     else:
         raise ValueError("Unknown dataset in data_dir")
-    if patient == 21:
+    if dataset == "CHB-MIT" and patient == 21:
         pat_id = "sub-01"
     else:
         pat_id = f"sub-{patient.zfill(2)}"
@@ -217,6 +209,9 @@ class PrepDataTeacherBIDS:
     def apply(self):
         # Cache check
         cachedir = self.settings["cachedir"]
+        if os.path.exists(cachedir) == False:
+            os.makedirs(cachedir)
+            print(f"Created cache directory: {cachedir}")
         filename = f"{self.type}_{self.patient}.hkl"
         cache_path = os.path.join(cachedir, filename)
         cache = load_hickle_file(cache_path)

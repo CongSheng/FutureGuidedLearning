@@ -6,6 +6,7 @@ from scipy.io import loadmat
 from scipy.signal import resample
 import stft
 import json
+from mne.io import read_raw_edf
 from utils.log import log
 from utils.save_load import (
     save_pickle_file,
@@ -13,7 +14,6 @@ from utils.save_load import (
     save_hickle_file,
     load_hickle_file,
 )
-from mne.io import read_raw_edf
 
 
 def load_signals_CHBMIT(data_dir, target, data_type):
